@@ -383,7 +383,7 @@ impl CompletionIntent {
     }
 }
 
-/// A completion provided by a language server
+/// A generic completion that can come from different sources.
 #[derive(Clone)]
 pub struct Completion {
     /// The range of text that will be replaced by this completion.
@@ -412,6 +412,8 @@ pub struct Completion {
 #[derive(Debug, Clone)]
 pub enum CompletionSource {
     Lsp {
+        /// The alternate `insert` range, if provided by the LSP server.
+        insert_range: Option<Range<Anchor>>,
         /// The id of the language server that produced this completion.
         server_id: LanguageServerId,
         /// The raw completion provided by the language server.
@@ -526,7 +528,6 @@ impl std::fmt::Debug for Completion {
     }
 }
 
-/// A completion provided by a language server
 #[derive(Clone, Debug)]
 pub(crate) struct CoreCompletion {
     replace_range: Range<Anchor>,

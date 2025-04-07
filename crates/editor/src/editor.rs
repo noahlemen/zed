@@ -18697,6 +18697,7 @@ fn snippet_completions(
                     insert_range: None,
                     new_text: snippet.body.clone(),
                     source: CompletionSource::Lsp {
+                        insert_range: None,
                         server_id: LanguageServerId(usize::MAX),
                         resolved: true,
                         lsp_completion: Box::new(lsp::CompletionItem {
