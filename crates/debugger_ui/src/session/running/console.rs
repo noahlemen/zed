@@ -356,7 +356,8 @@ impl ConsoleQueryBarCompletionProvider {
                         let variable_value = variables.get(&string_match.string)?;
 
                         Some(project::Completion {
-                            old_range: buffer_position..buffer_position,
+                            replace_range: buffer_position..buffer_position,
+                            insert_range: None,
                             new_text: string_match.string.clone(),
                             label: CodeLabel {
                                 filter_range: 0..string_match.string.len(),
@@ -399,7 +400,8 @@ impl ConsoleQueryBarCompletionProvider {
                     .await?
                     .iter()
                     .map(|completion| project::Completion {
-                        old_range: buffer_position..buffer_position, // TODO(debugger): change this
+                        replace_range: buffer_position..buffer_position, // TODO(debugger): change this
+                        insert_range: None,
                         new_text: completion.text.clone().unwrap_or(completion.label.clone()),
                         label: CodeLabel {
                             filter_range: 0..completion.label.len(),
