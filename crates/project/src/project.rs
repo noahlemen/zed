@@ -383,7 +383,7 @@ impl CompletionIntent {
     }
 }
 
-/// A generic completion that can come from different sources.
+/// Similar to `CoreCompletion`, but with extra metadata attached.
 #[derive(Clone)]
 pub struct Completion {
     /// The range of text that will be replaced by this completion.
@@ -528,6 +528,7 @@ impl std::fmt::Debug for Completion {
     }
 }
 
+/// A generic completion that can come from different sources.
 #[derive(Clone, Debug)]
 pub(crate) struct CoreCompletion {
     replace_range: Range<Anchor>,
