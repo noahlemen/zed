@@ -100,7 +100,6 @@ impl ContextPickerCompletionProvider {
                 }
             }),
         );
-
         completions.extend(
             supported_context_picker_modes(&thread_store)
                 .iter()

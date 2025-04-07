@@ -2206,8 +2206,6 @@ impl LspCommand for GetCompletions {
                         .as_ref()
                         .and_then(|item_defaults| item_defaults.data.clone())
                     {
-                        // Servers (e.g. JDTLS) prefer unchanged completions, when resolving the items later,
-                        // so we do not insert the defaults here, but `data` is needed for resolving, so this is an exception.
                         lsp_completion.data = Some(default_data);
                     }
                 }
