@@ -65,7 +65,8 @@ impl Inlay {
         }
     }
 
-    pub fn conflict_marker<T: Into<Rope>>(id: usize, position: Anchor, text: T) -> Self {
+    pub fn conflict_marker(id: usize, position: Anchor, mut text: String) -> Self {
+        text.insert(0, ' ');
         Self {
             id: InlayId::ConflictMarker(id),
             position,

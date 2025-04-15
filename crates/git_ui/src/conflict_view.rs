@@ -292,12 +292,12 @@ fn conflicts_updated(
         ours_inlays.push(Inlay::conflict_marker(
             util::post_inc(&mut conflict_addon.next_inlay_id),
             ours_inlay_anchor,
-            "hello!",
+            conflict_set.ours_name().to_owned(),
         ));
         theirs_inlays.push(Inlay::conflict_marker(
             util::post_inc(&mut conflict_addon.next_inlay_id),
             theirs_inlay_anchor,
-            "goodbye!",
+            conflict_set.theirs_name().to_owned(),
         ));
     }
     let new_block_ids = editor.insert_blocks(blocks, None, cx);
