@@ -250,6 +250,7 @@ const COLUMNAR_SELECTION_MODIFIERS: Modifiers = Modifiers {
 pub enum InlayId {
     InlineCompletion(usize),
     Hint(usize),
+    ConflictMarker(usize),
 }
 
 impl InlayId {
@@ -257,6 +258,7 @@ impl InlayId {
         match self {
             Self::InlineCompletion(id) => *id,
             Self::Hint(id) => *id,
+            Self::ConflictMarker(id) => *id,
         }
     }
 }

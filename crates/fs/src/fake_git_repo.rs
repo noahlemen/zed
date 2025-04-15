@@ -151,6 +151,14 @@ impl GitRepository for FakeGitRepository {
         self.with_state(|state| state.merge_head_shas.clone())
     }
 
+    fn cherry_pick_head_sha(&self) -> Option<String> {
+        None
+    }
+
+    fn rebase_head_sha(&self) -> Option<String> {
+        None
+    }
+
     fn show(&self, _commit: String) -> BoxFuture<Result<CommitDetails>> {
         unimplemented!()
     }

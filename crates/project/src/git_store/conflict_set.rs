@@ -1,5 +1,5 @@
 use git::repository::CommitDetails;
-use gpui::{App, Context, Entity, EventEmitter};
+use gpui::{App, Context, Entity, EventEmitter, SharedString};
 use std::{cmp::Ordering, ops::Range, sync::Arc};
 use text::{Anchor, BufferId, OffsetRangeExt as _};
 
@@ -18,6 +18,9 @@ pub struct ConflictSetUpdate {
 #[derive(Debug, Clone)]
 pub struct ConflictSetSnapshot {
     pub buffer_id: BufferId,
+    pub merge_head: Option<SharedString>,
+    pub cherry_pick_head: Option<SharedString>,
+    pub rebase_head: Option<SharedString>,
     pub ours_info: Option<CommitDetails>,
     pub theirs_info: Option<CommitDetails>,
     pub conflicts: Arc<[ConflictRegion]>,
@@ -89,13 +92,35 @@ impl ConflictSetSnapshot {
             new_range,
         }
     }
+
+    pub fn ours_name(&self) -> &'static str {
+        if self.rebase_head.is_some() {
+            "Upstream Change"
+        } else if self.cherry_pick_head.is_some() {
+            "Current Change"
+        } else {
+            "Current Change"
+        }
+    }
+
+    pub fn theirs_name(&self) -> &'static str {
+        if self.rebase_head.is_some() {
+            "Rebased Change"
+        } else if self.cherry_pick_head.is_some() {
+            "Cherry-picked Change"
+        } else {
+            "Incoming Change"
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictRegion {
     pub range: Range<Anchor>,
     pub ours: Range<Anchor>,
+    pub ours_start_eol: Anchor,
     pub theirs: Range<Anchor>,
+    pub theirs_end_eol: Anchor,
     pub base: Option<Range<Anchor>>,
 }
 
@@ -136,6 +161,9 @@ impl ConflictSet {
                 buffer_id,
                 ours_info: None,
                 theirs_info: None,
+                cherry_pick_head: None,
+                rebase_head: None,
+                merge_head: None,
                 conflicts: Default::default(),
             },
         }
@@ -182,6 +210,7 @@ impl ConflictSet {
 
         let mut conflict_start: Option<usize> = None;
         let mut ours_start: Option<usize> = None;
+        let mut ours_start_eol: Option<usize> = None;
         let mut ours_end: Option<usize> = None;
         let mut base_start: Option<usize> = None;
         let mut base_end: Option<usize> = None;
@@ -195,6 +224,7 @@ impl ConflictSet {
                 // abandon the previous one and start a new one
                 conflict_start = Some(line_pos);
                 ours_start = Some(line_end + 1);
+                ours_start_eol = Some(line_end);
             } else if line.starts_with("||||||| ")
                 && conflict_start.is_some()
                 && ours_start.is_some()
@@ -225,8 +255,10 @@ impl ConflictSet {
                     ..buffer.anchor_before(conflict_end);
                 let ours = buffer.anchor_after(ours_start.unwrap())
                     ..buffer.anchor_before(ours_end.unwrap());
+                let ours_start_eol = buffer.anchor_before(ours_start_eol.unwrap());
                 let theirs =
                     buffer.anchor_after(theirs_start.unwrap())..buffer.anchor_before(theirs_end);
+                let theirs_end_eol = buffer.anchor_before(line_end);
 
                 let base = base_start
                     .zip(base_end)
@@ -235,7 +267,9 @@ impl ConflictSet {
                 conflicts.push(ConflictRegion {
                     range,
                     ours,
+                    ours_start_eol,
                     theirs,
+                    theirs_end_eol,
                     base,
                 });
 
@@ -254,6 +288,9 @@ impl ConflictSet {
             conflicts: conflicts.into(),
             ours_info: None,
             theirs_info: None,
+            cherry_pick_head: None,
+            rebase_head: None,
+            merge_head: None,
             buffer_id: buffer.remote_id(),
         }
     }

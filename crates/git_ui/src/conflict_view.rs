@@ -1,23 +1,28 @@
 use collections::{HashMap, HashSet};
 use editor::{
     ConflictsOurs, ConflictsOursMarker, ConflictsOuter, ConflictsTheirs, ConflictsTheirsMarker,
-    Editor, EditorEvent, ExcerptId, MultiBuffer, RowHighlightOptions,
-    display_map::{BlockContext, BlockPlacement, BlockProperties, BlockStyle, CustomBlockId},
+    Editor, EditorEvent, ExcerptId, InlayId, MultiBuffer, RowHighlightOptions, ToPoint,
+    display_map::{
+        BlockContext, BlockPlacement, BlockProperties, BlockStyle, CustomBlockId, Inlay,
+    },
 };
 use gpui::{
-    App, Context, Entity, Hsla, InteractiveElement as _, ParentElement as _, Subscription,
-    WeakEntity,
+    App, AppContext as _, Context, Entity, Hsla, InteractiveElement as _, ParentElement as _,
+    Subscription, WeakEntity,
 };
 use language::{Anchor, Buffer, BufferId};
-use project::{ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate};
+use project::{ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate, InlayHint};
 use std::{ops::Range, sync::Arc};
 use ui::{
-    ActiveTheme, AnyElement, Element as _, StatefulInteractiveElement, Styled,
+    ActiveTheme, AnyElement, Element as _, FluentBuilder, StatefulInteractiveElement, Styled,
     StyledTypography as _, div, h_flex, rems,
 };
 
+use crate::commit_tooltip::{CommitDetails, CommitTooltip};
+
 pub(crate) struct ConflictAddon {
     buffers: HashMap<BufferId, BufferConflicts>,
+    next_inlay_id: usize,
 }
 
 impl ConflictAddon {
@@ -30,6 +35,8 @@ impl ConflictAddon {
 
 struct BufferConflicts {
     block_ids: Vec<(Range<Anchor>, CustomBlockId)>,
+    ours_inlay_ids: Vec<InlayId>,
+    theirs_inlay_ids: Vec<InlayId>,
     conflict_set: Entity<ConflictSet>,
     _subscription: Subscription,
 }
@@ -47,6 +54,7 @@ impl editor::Addon for ConflictAddon {
 pub fn register_editor(editor: &mut Editor, buffer: Entity<MultiBuffer>, cx: &mut Context<Editor>) {
     editor.register_addon(ConflictAddon {
         buffers: Default::default(),
+        next_inlay_id: 0,
     });
 
     let buffers = buffer.read(cx).all_buffers().clone();
@@ -83,7 +91,6 @@ fn excerpt_for_buffer_updated(
     cx: &mut Context<Editor>,
 ) {
     let conflicts_len = conflict_set.read(cx).snapshot().conflicts.len();
-    dbg!("excerpt for buffer updated", conflicts_len);
     conflicts_updated(
         editor,
         conflict_set,
@@ -114,6 +121,8 @@ fn buffer_added(editor: &mut Editor, buffer: Entity<Buffer>, cx: &mut Context<Ed
             let subscription = cx.subscribe(&conflict_set, conflicts_updated);
             BufferConflicts {
                 block_ids: Vec::new(),
+                ours_inlay_ids: Vec::new(),
+                theirs_inlay_ids: Vec::new(),
                 conflict_set: conflict_set.clone(),
                 _subscription: subscription,
             }
@@ -122,7 +131,6 @@ fn buffer_added(editor: &mut Editor, buffer: Entity<Buffer>, cx: &mut Context<Ed
     let conflict_set = buffer_conflicts.conflict_set.clone();
     let conflicts_len = conflict_set.read(cx).snapshot().conflicts.len();
     let addon_conflicts_len = buffer_conflicts.block_ids.len();
-    dbg!("buffer added", conflicts_len);
     conflicts_updated(
         editor,
         conflict_set,
@@ -137,6 +145,7 @@ fn buffer_added(editor: &mut Editor, buffer: Entity<Buffer>, cx: &mut Context<Ed
 
 fn buffers_removed(editor: &mut Editor, removed_buffer_ids: &[BufferId], cx: &mut Context<Editor>) {
     let mut removed_block_ids = HashSet::default();
+    let mut removed_inlay_ids = Vec::new();
     editor
         .addon_mut::<ConflictAddon>()
         .unwrap()
@@ -144,12 +153,15 @@ fn buffers_removed(editor: &mut Editor, removed_buffer_ids: &[BufferId], cx: &mu
         .retain(|buffer_id, buffer| {
             if removed_buffer_ids.contains(&buffer_id) {
                 removed_block_ids.extend(buffer.block_ids.iter().map(|(_, block_id)| *block_id));
+                removed_inlay_ids.extend(buffer.ours_inlay_ids.iter().copied());
+                removed_inlay_ids.extend(buffer.theirs_inlay_ids.iter().copied());
                 false
             } else {
                 true
             }
         });
     editor.remove_blocks(removed_block_ids, None, cx);
+    editor.splice_inlays(&removed_inlay_ids, Vec::new(), cx);
 }
 
 fn conflicts_updated(
@@ -158,7 +170,6 @@ fn conflicts_updated(
     event: &ConflictSetUpdate,
     cx: &mut Context<Editor>,
 ) {
-    dbg!("conflicts updated", &event.old_range, &event.new_range);
     let buffer_id = conflict_set.read(cx).snapshot.buffer_id;
     let conflict_set = conflict_set.read(cx).snapshot();
     let multibuffer = editor.buffer().read(cx);
@@ -221,6 +232,8 @@ fn conflicts_updated(
     let editor_handle = cx.weak_entity();
     let new_conflicts = &conflict_set.conflicts[event.new_range.clone()];
     let mut blocks = Vec::new();
+    let mut ours_inlays = Vec::new();
+    let mut theirs_inlays = Vec::new();
     for conflict in new_conflicts {
         let Some((excerpt_id, _)) = excerpts.iter().find(|(_, range)| {
             let precedes_start = range
@@ -244,6 +257,16 @@ fn conflicts_updated(
         let Some(anchor) = snapshot.anchor_in_excerpt(excerpt_id, conflict.range.start) else {
             continue;
         };
+        let Some(ours_inlay_anchor) =
+            snapshot.anchor_in_excerpt(excerpt_id, conflict.ours_start_eol)
+        else {
+            continue;
+        };
+        let Some(theirs_inlay_anchor) =
+            snapshot.anchor_in_excerpt(excerpt_id, conflict.theirs_end_eol)
+        else {
+            continue;
+        };
 
         let editor_handle = editor_handle.clone();
         blocks.push(BlockProperties {
@@ -264,20 +287,52 @@ fn conflicts_updated(
                 }
             }),
             priority: 0,
-        })
+        });
+        let conflict_addon = editor.addon_mut::<ConflictAddon>().unwrap();
+        ours_inlays.push(Inlay::conflict_marker(
+            util::post_inc(&mut conflict_addon.next_inlay_id),
+            ours_inlay_anchor,
+            "hello!",
+        ));
+        theirs_inlays.push(Inlay::conflict_marker(
+            util::post_inc(&mut conflict_addon.next_inlay_id),
+            theirs_inlay_anchor,
+            "goodbye!",
+        ));
     }
     let new_block_ids = editor.insert_blocks(blocks, None, cx);
 
     let conflict_addon = editor.addon_mut::<ConflictAddon>().unwrap();
-    if let Some(buffer_conflicts) = conflict_addon.buffers.get_mut(&buffer_id) {
-        buffer_conflicts.block_ids.splice(
-            event.old_range.clone(),
-            new_conflicts
-                .iter()
-                .map(|conflict| conflict.range.clone())
-                .zip(new_block_ids),
-        );
-    }
+    let (old_ours_inlays, old_theirs_inlays) =
+        if let Some(buffer_conflicts) = conflict_addon.buffers.get_mut(&buffer_id) {
+            buffer_conflicts.block_ids.splice(
+                event.old_range.clone(),
+                new_conflicts
+                    .iter()
+                    .map(|conflict| conflict.range.clone())
+                    .zip(new_block_ids),
+            );
+            (
+                buffer_conflicts
+                    .ours_inlay_ids
+                    .splice(
+                        event.old_range.clone(),
+                        ours_inlays.iter().map(|inlay| inlay.id),
+                    )
+                    .collect::<Vec<_>>(),
+                buffer_conflicts
+                    .theirs_inlay_ids
+                    .splice(
+                        event.old_range.clone(),
+                        theirs_inlays.iter().map(|inlay| inlay.id),
+                    )
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+    editor.splice_inlays(&old_ours_inlays, ours_inlays, cx);
+    editor.splice_inlays(&old_theirs_inlays, theirs_inlays, cx);
 }
 
 fn update_conflict_highlighting(
@@ -287,7 +342,6 @@ fn update_conflict_highlighting(
     excerpt_id: editor::ExcerptId,
     cx: &mut Context<Editor>,
 ) {
-    log::debug!("update conflict highlighting for {conflict:?}");
     let theme = cx.theme().clone();
     let colors = theme.colors();
     let outer_start = buffer
@@ -348,6 +402,21 @@ fn render_conflict_buttons(
     editor: WeakEntity<Editor>,
     cx: &mut BlockContext,
 ) -> AnyElement {
+    let ours_name = format!("Take {}", conflict_set.ours_name());
+    let theirs_name = format!("Take {}", conflict_set.theirs_name());
+    let workspace = editor
+        .upgrade()
+        .and_then(|editor| editor.read(cx).workspace());
+    let repository = editor
+        .upgrade()
+        .and_then(|editor| editor.read(cx).project.clone())
+        .and_then(|project| {
+            project
+                .read(cx)
+                .git_store()
+                .read(cx)
+                .repository_and_path_for_buffer_id(conflict_set.buffer_id, cx)
+        });
     h_flex()
         .h(cx.line_height)
         .items_end()
@@ -358,18 +427,32 @@ fn render_conflict_buttons(
             div()
                 .id("ours")
                 .px_1()
-                .child(format!(
-                    "Accept Ours ({})",
-                    conflict_set
-                        .ours_info
-                        .as_ref()
-                        .and_then(|info| info.message.lines().next())
-                        .unwrap_or("unknown"),
-                ))
+                .child(ours_name)
                 .rounded_t(rems(0.2))
                 .text_ui_sm(cx)
                 .hover(|this| this.bg(cx.theme().colors().element_background))
                 .cursor_pointer()
+                .when_some(
+                    conflict_set
+                        .ours_info
+                        .as_ref()
+                        .and_then(|info| CommitDetails::parse(info).ok())
+                        .zip(workspace.clone())
+                        .zip(repository.clone()),
+                    |el, ((info, workspace), (repo, _))| {
+                        el.hoverable_tooltip(move |_window, cx| {
+                            cx.new(|cx| {
+                                CommitTooltip::new(
+                                    info.clone(),
+                                    repo.clone(),
+                                    workspace.downgrade(),
+                                    cx,
+                                )
+                            })
+                            .into()
+                        })
+                    },
+                )
                 .on_click({
                     let editor = editor.clone();
                     let conflict = conflict.clone();
@@ -383,7 +466,7 @@ fn render_conflict_buttons(
             div()
                 .id("theirs")
                 .px_1()
-                .child("Accept Theirs")
+                .child(theirs_name)
                 .rounded_t(rems(0.2))
                 .text_ui_sm(cx)
                 .hover(|this| this.bg(cx.theme().colors().element_background))
@@ -407,7 +490,7 @@ fn render_conflict_buttons(
             div()
                 .id("both")
                 .px_1()
-                .child("Accept Both")
+                .child("Take Both")
                 .rounded_t(rems(0.2))
                 .text_ui_sm(cx)
                 .hover(|this| this.bg(cx.theme().colors().element_background))

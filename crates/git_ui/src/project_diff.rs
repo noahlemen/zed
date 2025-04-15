@@ -97,6 +97,11 @@ impl ConflictMetadataFile {
     }
 
     fn content(&self) -> Rope {
+        // info to consider for this:
+        //
+        // - "merging X into Y" or "rebasing X onto Y" (do we have access to this info?)
+        // - HEAD is ...
+        // - other-branch is ...
         format!("oh no a merge conflict").into()
     }
 }
@@ -535,7 +540,8 @@ impl ProjectDiff {
         cx: &mut AsyncWindowContext,
     ) -> Result<()> {
         while let Some(_) = recv.next().await {
-            dbg!("");
+            let buffers_to_load = this.update(cx, |this, cx| this.load_buffers(cx))?;
+
             let merge_details = this.update(cx, |this, cx| {
                 let git_store = this.git_store.read(cx);
                 let active_repository = git_store.active_repository()?;
@@ -545,8 +551,6 @@ impl ProjectDiff {
                 }
                 active_repository.read(cx).merge_details.clone()
             })?;
-
-            dbg!(&merge_details);
 
             if let Some(merge_details) = merge_details {
                 this.update(cx, |this, cx| {
@@ -571,7 +575,6 @@ impl ProjectDiff {
                     });
                     this.multibuffer.update(cx, |multibuffer, cx| {
                         let max_point = buffer.read(cx).max_point();
-                        dbg!("excerpts");
                         multibuffer.set_excerpts_for_path(
                             file.path_key(),
                             buffer,
@@ -584,7 +587,6 @@ impl ProjectDiff {
                 .ok();
             }
 
-            let buffers_to_load = this.update(cx, |this, cx| this.load_buffers(cx))?;
             for buffer_to_load in buffers_to_load {
                 if let Some(buffer) = buffer_to_load.await.log_err() {
                     cx.update(|window, cx| {
@@ -594,12 +596,6 @@ impl ProjectDiff {
                 }
             }
             this.update(cx, |this, cx| {
-                dbg!(
-                    this.multibuffer
-                        .read(cx)
-                        .excerpt_paths()
-                        .collect::<Vec<_>>()
-                );
                 this.pending_scroll.take();
                 cx.notify();
             })?;
@@ -661,6 +657,7 @@ impl Item for ProjectDiff {
     }
 
     fn tab_content(&self, params: TabContentParams, _window: &Window, _: &App) -> AnyElement {
+        // FIXME adjust name if there are conflicts?
         Label::new("Uncommitted Changes")
             .color(if params.selected {
                 Color::Default

@@ -16,7 +16,7 @@ use fs::Fs;
 use futures::{
     FutureExt, StreamExt as _,
     channel::{mpsc, oneshot},
-    future::{self, OptionFuture, Shared},
+    future::{self, Shared},
 };
 use git::{
     BuildPermalinkParams, GitHostingProviderRegistry, WORK_DIRECTORY_REPO_PATH,
@@ -238,6 +238,8 @@ pub struct RepositorySnapshot {
     pub branch: Option<Branch>,
     pub merge_conflicts: TreeSet<RepoPath>,
     pub merge_head_shas: Vec<SharedString>,
+    pub cherry_pick_head_sha: Option<SharedString>,
+    pub rebase_head_sha: Option<SharedString>,
     pub merge_details: Option<MergeDetails>,
     pub scan_id: u64,
 }
@@ -2592,6 +2594,8 @@ impl RepositorySnapshot {
             branch: None,
             merge_conflicts: Default::default(),
             merge_head_shas: Default::default(),
+            cherry_pick_head_sha: None,
+            rebase_head_sha: None,
             scan_id: 0,
             merge_details: None,
         }
@@ -4488,6 +4492,8 @@ async fn compute_snapshot(
         .into_iter()
         .map(SharedString::from)
         .collect();
+    let cherry_pick_head_sha = backend.cherry_pick_head_sha().map(SharedString::from);
+    let rebase_head_sha = backend.rebase_head_sha().map(SharedString::from);
 
     let statuses_by_path = SumTree::from_iter(
         statuses
@@ -4500,7 +4506,9 @@ async fn compute_snapshot(
         &(),
     );
 
-    let merge_head_shas_changed = merge_head_shas != prev_snapshot.merge_head_shas;
+    let merge_head_shas_changed = merge_head_shas != prev_snapshot.merge_head_shas
+        || cherry_pick_head_sha != prev_snapshot.cherry_pick_head_sha
+        || rebase_head_sha != prev_snapshot.rebase_head_sha;
 
     if merge_head_shas_changed
         || branch != prev_snapshot.branch
@@ -4529,7 +4537,6 @@ async fn compute_snapshot(
     let merge_details = head
         .zip(merge_head)
         .map(|(head, merge_head)| MergeDetails { head, merge_head });
-    dbg!(&merge_details);
 
     let snapshot = RepositorySnapshot {
         id,
@@ -4540,6 +4547,8 @@ async fn compute_snapshot(
         branch,
         merge_conflicts,
         merge_head_shas,
+        cherry_pick_head_sha,
+        rebase_head_sha,
         merge_details,
     };
 
