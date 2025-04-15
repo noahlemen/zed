@@ -11,7 +11,10 @@ use gpui::{
     Subscription, WeakEntity,
 };
 use language::{Anchor, Buffer, BufferId};
-use project::{ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate, InlayHint};
+use project::{
+    ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate, InlayHint,
+    git_store::{Repository, RepositorySnapshot},
+};
 use std::{ops::Range, sync::Arc};
 use ui::{
     ActiveTheme, AnyElement, Element as _, FluentBuilder, StatefulInteractiveElement, Styled,
@@ -172,6 +175,17 @@ fn conflicts_updated(
 ) {
     let buffer_id = conflict_set.read(cx).snapshot.buffer_id;
     let conflict_set = conflict_set.read(cx).snapshot();
+    let Some(repository) = editor.project.as_ref().and_then(|project| {
+        let (repo, _) = project
+            .read(cx)
+            .git_store()
+            .read(cx)
+            .repository_and_path_for_buffer_id(conflict_set.buffer_id, cx)?;
+        Some(repo)
+    }) else {
+        return;
+    };
+    let repository_snapshot = repository.read(cx).snapshot();
     let multibuffer = editor.buffer().read(cx);
     let snapshot = multibuffer.snapshot(cx);
     let excerpts = multibuffer.excerpts_for_buffer(buffer_id, cx);
@@ -276,9 +290,11 @@ fn conflicts_updated(
             render: Arc::new({
                 let conflict = conflict.clone();
                 let conflict_set = conflict_set.clone();
+                let repository = repository.clone();
                 move |cx| {
                     render_conflict_buttons(
                         &conflict_set,
+                        &repository,
                         &conflict,
                         excerpt_id,
                         editor_handle.clone(),
@@ -292,12 +308,12 @@ fn conflicts_updated(
         ours_inlays.push(Inlay::conflict_marker(
             util::post_inc(&mut conflict_addon.next_inlay_id),
             ours_inlay_anchor,
-            conflict_set.ours_name().to_owned(),
+            repository_snapshot.ours_name().to_owned(),
         ));
         theirs_inlays.push(Inlay::conflict_marker(
             util::post_inc(&mut conflict_addon.next_inlay_id),
             theirs_inlay_anchor,
-            conflict_set.theirs_name().to_owned(),
+            repository_snapshot.theirs_name().to_owned(),
         ));
     }
     let new_block_ids = editor.insert_blocks(blocks, None, cx);
@@ -397,26 +413,22 @@ fn update_conflict_highlighting(
 
 fn render_conflict_buttons(
     conflict_set: &ConflictSetSnapshot,
+    repository: &Entity<Repository>,
     conflict: &ConflictRegion,
     excerpt_id: ExcerptId,
     editor: WeakEntity<Editor>,
     cx: &mut BlockContext,
 ) -> AnyElement {
-    let ours_name = format!("Take {}", conflict_set.ours_name());
-    let theirs_name = format!("Take {}", conflict_set.theirs_name());
+    let repo_snapshot = repository.read(cx).snapshot();
+    let ours_name = format!("Take {}", repo_snapshot.ours_name());
+    let theirs_name = format!("Take {}", repo_snapshot.theirs_name());
+    let ours_details = repo_snapshot
+        .head
+        .as_ref()
+        .and_then(|info| CommitDetails::parse(info).ok());
     let workspace = editor
         .upgrade()
         .and_then(|editor| editor.read(cx).workspace());
-    let repository = editor
-        .upgrade()
-        .and_then(|editor| editor.read(cx).project.clone())
-        .and_then(|project| {
-            project
-                .read(cx)
-                .git_store()
-                .read(cx)
-                .repository_and_path_for_buffer_id(conflict_set.buffer_id, cx)
-        });
     h_flex()
         .h(cx.line_height)
         .items_end()
@@ -432,27 +444,20 @@ fn render_conflict_buttons(
                 .text_ui_sm(cx)
                 .hover(|this| this.bg(cx.theme().colors().element_background))
                 .cursor_pointer()
-                .when_some(
-                    conflict_set
-                        .ours_info
-                        .as_ref()
-                        .and_then(|info| CommitDetails::parse(info).ok())
-                        .zip(workspace.clone())
-                        .zip(repository.clone()),
-                    |el, ((info, workspace), (repo, _))| {
-                        el.hoverable_tooltip(move |_window, cx| {
-                            cx.new(|cx| {
-                                CommitTooltip::new(
-                                    info.clone(),
-                                    repo.clone(),
-                                    workspace.downgrade(),
-                                    cx,
-                                )
-                            })
-                            .into()
+                .when_some(ours_details.zip(workspace), |el, (info, workspace)| {
+                    let repository = repository.clone();
+                    el.hoverable_tooltip(move |_window, cx| {
+                        cx.new(|cx| {
+                            CommitTooltip::new(
+                                info.clone(),
+                                repository.clone(),
+                                workspace.downgrade(),
+                                cx,
+                            )
                         })
-                    },
-                )
+                        .into()
+                    })
+                })
                 .on_click({
                     let editor = editor.clone();
                     let conflict = conflict.clone();

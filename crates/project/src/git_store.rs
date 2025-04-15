@@ -16,7 +16,7 @@ use fs::Fs;
 use futures::{
     FutureExt, StreamExt as _,
     channel::{mpsc, oneshot},
-    future::{self, Shared},
+    future::{self, Shared, join_all},
 };
 use git::{
     BuildPermalinkParams, GitHostingProviderRegistry, WORK_DIRECTORY_REPO_PATH,
@@ -237,17 +237,11 @@ pub struct RepositorySnapshot {
     pub work_directory_abs_path: Arc<Path>,
     pub branch: Option<Branch>,
     pub merge_conflicts: TreeSet<RepoPath>,
-    pub merge_head_shas: Vec<SharedString>,
-    pub cherry_pick_head_sha: Option<SharedString>,
-    pub rebase_head_sha: Option<SharedString>,
-    pub merge_details: Option<MergeDetails>,
+    pub head: Option<CommitDetails>,
+    pub merge_heads: Vec<CommitDetails>,
+    pub cherry_pick_head: Option<CommitDetails>,
+    pub rebase_head: Option<CommitDetails>,
     pub scan_id: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MergeDetails {
-    pub head: CommitDetails,
-    pub merge_head: CommitDetails,
 }
 
 type JobId = u64;
@@ -2269,26 +2263,15 @@ impl BufferGitState {
             self.conflict_updated_futures.push(tx);
             let git_store = self.git_store.clone();
             self.reparse_conflict_markers_task = Some(cx.spawn(async move |this, cx| {
-                let repository = git_store
-                    .update(cx, |git_store, cx| {
-                        git_store.repository_and_path_for_buffer_id(buffer.remote_id(), cx)
-                    })
-                    .ok()
-                    .flatten();
-                // FIXME clean up
-                let (ours, theirs) = repository
-                    .and_then(|(repo, _)| {
-                        repo.update(cx, |repo, _| repo.merge_details.clone()).ok()
-                    })
-                    .flatten()
-                    .map(|details| (details.head, details.merge_head))
-                    .unzip();
+                let repository_snapshot = git_store.update(cx, |git_store, cx| {
+                    let (repo, _) =
+                        git_store.repository_and_path_for_buffer_id(buffer.remote_id(), cx)?;
+                    Some(repo.read(cx).snapshot.clone())
+                })?;
                 let (snapshot, changed_range) = cx
                     .background_spawn(async move {
                         // FIXME don't reload conflict stuff unless has_conflict bit changed
-                        let mut new_snapshot = ConflictSet::parse(&buffer);
-                        new_snapshot.ours_info = ours;
-                        new_snapshot.theirs_info = theirs;
+                        let new_snapshot = ConflictSet::parse(&buffer);
                         let changed_range = old_snapshot.compare(&new_snapshot, &buffer);
                         (new_snapshot, changed_range)
                     })
@@ -2593,11 +2576,11 @@ impl RepositorySnapshot {
             work_directory_abs_path,
             branch: None,
             merge_conflicts: Default::default(),
-            merge_head_shas: Default::default(),
-            cherry_pick_head_sha: None,
-            rebase_head_sha: None,
+            head: None,
+            merge_heads: Default::default(),
+            cherry_pick_head: None,
+            rebase_head: None,
             scan_id: 0,
-            merge_details: None,
         }
     }
 
@@ -2718,9 +2701,33 @@ impl RepositorySnapshot {
             .to_string()
             .into()
     }
+
+    pub fn ours_name(&self) -> &'static str {
+        if self.rebase_head.is_some() {
+            "Upstream Change"
+        } else if self.cherry_pick_head.is_some() {
+            "Current Change"
+        } else {
+            "Current Change"
+        }
+    }
+
+    pub fn theirs_name(&self) -> &'static str {
+        if self.rebase_head.is_some() {
+            "Rebased Change"
+        } else if self.cherry_pick_head.is_some() {
+            "Cherry-picked Change"
+        } else {
+            "Incoming Change"
+        }
+    }
 }
 
 impl Repository {
+    pub fn snapshot(&self) -> RepositorySnapshot {
+        self.snapshot.clone()
+    }
+
     fn local(
         id: RepositoryId,
         work_directory_abs_path: Arc<Path>,
@@ -4487,13 +4494,27 @@ async fn compute_snapshot(
         .merge_message()
         .await
         .and_then(|msg| Some(msg.lines().nth(0)?.to_owned().into()));
-    let merge_head_shas = backend
-        .merge_head_shas()
-        .into_iter()
-        .map(SharedString::from)
-        .collect();
-    let cherry_pick_head_sha = backend.cherry_pick_head_sha().map(SharedString::from);
-    let rebase_head_sha = backend.rebase_head_sha().map(SharedString::from);
+    let head = backend.show("HEAD".into()).await.ok();
+    let merge_heads = join_all(
+        backend
+            .merge_head_shas()
+            .into_iter()
+            .map(|sha| backend.show(sha)),
+    )
+    .await
+    .into_iter()
+    .flat_map(|result| result.log_err())
+    .collect::<Vec<_>>();
+    let cherry_pick_head = if let Some(sha) = backend.cherry_pick_head_sha() {
+        backend.show(sha).await.log_err()
+    } else {
+        None
+    };
+    let rebase_head = if let Some(sha) = backend.rebase_head_sha() {
+        backend.show(sha).await.log_err()
+    } else {
+        None
+    };
 
     let statuses_by_path = SumTree::from_iter(
         statuses
@@ -4506,11 +4527,22 @@ async fn compute_snapshot(
         &(),
     );
 
-    let merge_head_shas_changed = merge_head_shas != prev_snapshot.merge_head_shas
-        || cherry_pick_head_sha != prev_snapshot.cherry_pick_head_sha
-        || rebase_head_sha != prev_snapshot.rebase_head_sha;
+    let merge_state_changed = merge_heads
+        .iter()
+        .map(|commit| commit.sha.clone())
+        .ne(prev_snapshot
+            .merge_heads
+            .iter()
+            .map(|commit| commit.sha.clone()))
+        || cherry_pick_head.as_ref().map(|commit| &commit.sha)
+            != prev_snapshot
+                .cherry_pick_head
+                .as_ref()
+                .map(|commit| &commit.sha)
+        || rebase_head.as_ref().map(|commit| &commit.sha)
+            != prev_snapshot.rebase_head.as_ref().map(|commit| &commit.sha);
 
-    if merge_head_shas_changed
+    if merge_state_changed
         || branch != prev_snapshot.branch
         || statuses_by_path != prev_snapshot.statuses_by_path
     {
@@ -4527,16 +4559,10 @@ async fn compute_snapshot(
     // Cache merge conflict paths so they don't change from staging/unstaging,
     // until the merge heads change (at commit time, etc.).
     let mut merge_conflicts = prev_snapshot.merge_conflicts.clone();
-    if merge_head_shas_changed {
+    if merge_state_changed {
         merge_conflicts = current_merge_conflicts;
         events.push(RepositoryEvent::MergeHeadsChanged);
     }
-
-    let head = backend.show("HEAD".into()).await.ok();
-    let merge_head = backend.show("MERGE_HEAD".into()).await.ok();
-    let merge_details = head
-        .zip(merge_head)
-        .map(|(head, merge_head)| MergeDetails { head, merge_head });
 
     let snapshot = RepositorySnapshot {
         id,
@@ -4546,10 +4572,10 @@ async fn compute_snapshot(
         scan_id: prev_snapshot.scan_id + 1,
         branch,
         merge_conflicts,
-        merge_head_shas,
-        cherry_pick_head_sha,
-        rebase_head_sha,
-        merge_details,
+        head,
+        merge_heads,
+        cherry_pick_head,
+        rebase_head,
     };
 
     Ok((snapshot, events))

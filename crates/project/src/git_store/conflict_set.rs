@@ -18,11 +18,6 @@ pub struct ConflictSetUpdate {
 #[derive(Debug, Clone)]
 pub struct ConflictSetSnapshot {
     pub buffer_id: BufferId,
-    pub merge_head: Option<SharedString>,
-    pub cherry_pick_head: Option<SharedString>,
-    pub rebase_head: Option<SharedString>,
-    pub ours_info: Option<CommitDetails>,
-    pub theirs_info: Option<CommitDetails>,
     pub conflicts: Arc<[ConflictRegion]>,
 }
 
@@ -92,26 +87,6 @@ impl ConflictSetSnapshot {
             new_range,
         }
     }
-
-    pub fn ours_name(&self) -> &'static str {
-        if self.rebase_head.is_some() {
-            "Upstream Change"
-        } else if self.cherry_pick_head.is_some() {
-            "Current Change"
-        } else {
-            "Current Change"
-        }
-    }
-
-    pub fn theirs_name(&self) -> &'static str {
-        if self.rebase_head.is_some() {
-            "Rebased Change"
-        } else if self.cherry_pick_head.is_some() {
-            "Cherry-picked Change"
-        } else {
-            "Incoming Change"
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,11 +134,6 @@ impl ConflictSet {
             has_conflict,
             snapshot: ConflictSetSnapshot {
                 buffer_id,
-                ours_info: None,
-                theirs_info: None,
-                cherry_pick_head: None,
-                rebase_head: None,
-                merge_head: None,
                 conflicts: Default::default(),
             },
         }
@@ -179,8 +149,6 @@ impl ConflictSet {
                     new_range: 0..0,
                 });
                 self.snapshot.conflicts = Default::default();
-                self.snapshot.ours_info = None;
-                self.snapshot.theirs_info = None;
             }
             true
         } else {
@@ -286,11 +254,6 @@ impl ConflictSet {
 
         ConflictSetSnapshot {
             conflicts: conflicts.into(),
-            ours_info: None,
-            theirs_info: None,
-            cherry_pick_head: None,
-            rebase_head: None,
-            merge_head: None,
             buffer_id: buffer.remote_id(),
         }
     }

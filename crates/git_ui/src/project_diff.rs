@@ -25,7 +25,7 @@ use language::{Anchor, Buffer, Capability, LineEnding, OffsetRangeExt, Point, Ro
 use multi_buffer::{MultiBuffer, PathKey};
 use project::{
     Project, ProjectPath, WorktreeId,
-    git_store::{GitStore, GitStoreEvent, MergeDetails, RepositoryEvent},
+    git_store::{GitStore, GitStoreEvent, RepositoryEvent, RepositorySnapshot},
 };
 use std::{
     any::{Any, TypeId},
@@ -35,6 +35,7 @@ use std::{
 };
 use theme::ActiveTheme;
 use ui::{KeyBinding, Tooltip, prelude::*, vertical_divider};
+use unindent::Unindent as _;
 use util::ResultExt as _;
 use workspace::{
     CloseActiveItem, ItemNavHistory, SerializableItem, ToolbarItemEvent, ToolbarItemLocation,
@@ -70,7 +71,7 @@ struct DiffBuffer {
 /// Pseudo-file providing a multibuffer excerpt at the top of the project diff to describe the merge conflict situation.
 struct ConflictMetadataFile {
     path: Arc<Path>,
-    merge_details: MergeDetails,
+    snapshot: RepositorySnapshot,
     worktree_id: WorktreeId,
 }
 
@@ -80,14 +81,10 @@ const TRACKED_NAMESPACE: u32 = 2;
 const NEW_NAMESPACE: u32 = 3;
 
 impl ConflictMetadataFile {
-    fn new(merge_details: MergeDetails, worktree_id: WorktreeId) -> Self {
+    fn new(snapshot: RepositorySnapshot, worktree_id: WorktreeId) -> Self {
         Self {
-            path: Path::new(&format!(
-                "conflicted merge of {} and {}",
-                merge_details.head.sha, merge_details.merge_head.sha
-            ))
-            .into(),
-            merge_details,
+            path: Path::new("conflicted merge").into(),
+            snapshot,
             worktree_id,
         }
     }
@@ -97,12 +94,21 @@ impl ConflictMetadataFile {
     }
 
     fn content(&self) -> Rope {
+        "
+            Resolving merge conflicts.
+
+
+
+
+        "
+        .unindent()
+        .into()
         // info to consider for this:
+        //
         //
         // - "merging X into Y" or "rebasing X onto Y" (do we have access to this info?)
         // - HEAD is ...
         // - other-branch is ...
-        format!("oh no a merge conflict").into()
     }
 }
 
@@ -542,18 +548,21 @@ impl ProjectDiff {
         while let Some(_) = recv.next().await {
             let buffers_to_load = this.update(cx, |this, cx| this.load_buffers(cx))?;
 
-            let merge_details = this.update(cx, |this, cx| {
+            let repo_snapshot = this.update(cx, |this, cx| {
                 let git_store = this.git_store.read(cx);
                 let active_repository = git_store.active_repository()?;
                 if active_repository.read(cx).branch != this.current_branch {
                     this.current_branch = active_repository.read(cx).branch.clone();
                     cx.notify();
                 }
-                active_repository.read(cx).merge_details.clone()
+                Some(active_repository.read(cx).snapshot())
             })?;
 
-            if let Some(merge_details) = merge_details {
+            if let Some(repo_snapshot) =
+                repo_snapshot.filter(|snapshot| !snapshot.merge_conflicts.is_empty())
+            {
                 this.update(cx, |this, cx| {
+                    // FIXME use an appropriate worktree id for the repo? or does it matter?
                     let Some(worktree_id) = this
                         .project
                         .read(cx)
@@ -563,7 +572,7 @@ impl ProjectDiff {
                     else {
                         return;
                     };
-                    let file = Arc::new(ConflictMetadataFile::new(merge_details, worktree_id));
+                    let file = Arc::new(ConflictMetadataFile::new(repo_snapshot, worktree_id));
                     let buffer = cx.new(|cx| {
                         let buffer = TextBuffer::new_normalized(
                             0,
