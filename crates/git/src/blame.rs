@@ -1,4 +1,5 @@
 use crate::commit::get_messages;
+use crate::repository::CommitDetails;
 use crate::{GitRemote, Oid};
 use anyhow::{Context as _, Result, anyhow};
 use collections::{HashMap, HashSet};
@@ -131,6 +132,8 @@ pub struct BlameEntry {
 
     pub previous: Option<String>,
     pub filename: String,
+
+    pub parenthetical: Option<String>,
 }
 
 impl BlameEntry {
@@ -183,6 +186,10 @@ impl BlameEntry {
             // Directly return current time in UTC if there's no committer time or timezone
             Ok(time::OffsetDateTime::now_utc())
         }
+    }
+
+    pub fn conflict_marker(details: CommitDetails, parenthetical: String) -> Self {
+        todo!()
     }
 }
 

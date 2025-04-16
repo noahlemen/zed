@@ -16353,7 +16353,11 @@ impl Editor {
             let focused = self.focus_handle(cx).contains_focused(window, cx);
 
             let project = project.clone();
-            let blame = cx.new(|cx| GitBlame::new(buffer, project, user_triggered, focused, cx));
+            let blame = cx.new(|cx| {
+                let mut blame = GitBlame::new(buffer, project, cx);
+                blame.activate(user_triggered, focused, cx);
+                blame
+            });
             self.blame_subscription =
                 Some(cx.observe_in(&blame, window, |_, _, _, cx| cx.notify()));
             self.blame = Some(blame);

@@ -164,7 +164,7 @@ fn buffers_removed(editor: &mut Editor, removed_buffer_ids: &[BufferId], cx: &mu
             }
         });
     editor.remove_blocks(removed_block_ids, None, cx);
-    editor.splice_inlays(&removed_inlay_ids, Vec::new(), cx);
+    // editor.splice_inlays(&removed_inlay_ids, Vec::new(), cx);
 }
 
 fn conflicts_updated(
@@ -246,8 +246,8 @@ fn conflicts_updated(
     let editor_handle = cx.weak_entity();
     let new_conflicts = &conflict_set.conflicts[event.new_range.clone()];
     let mut blocks = Vec::new();
-    let mut ours_inlays = Vec::new();
-    let mut theirs_inlays = Vec::new();
+    // let mut ours_inlays = Vec::new();
+    // let mut theirs_inlays = Vec::new();
     for conflict in new_conflicts {
         let Some((excerpt_id, _)) = excerpts.iter().find(|(_, range)| {
             let precedes_start = range
@@ -271,16 +271,16 @@ fn conflicts_updated(
         let Some(anchor) = snapshot.anchor_in_excerpt(excerpt_id, conflict.range.start) else {
             continue;
         };
-        let Some(ours_inlay_anchor) =
-            snapshot.anchor_in_excerpt(excerpt_id, conflict.ours_start_eol)
-        else {
-            continue;
-        };
-        let Some(theirs_inlay_anchor) =
-            snapshot.anchor_in_excerpt(excerpt_id, conflict.theirs_end_eol)
-        else {
-            continue;
-        };
+        // let Some(ours_inlay_anchor) =
+        //     snapshot.anchor_in_excerpt(excerpt_id, conflict.ours_start_eol)
+        // else {
+        //     continue;
+        // };
+        // let Some(theirs_inlay_anchor) =
+        //     snapshot.anchor_in_excerpt(excerpt_id, conflict.theirs_end_eol)
+        // else {
+        //     continue;
+        // };
 
         let editor_handle = editor_handle.clone();
         blocks.push(BlockProperties {
@@ -304,51 +304,51 @@ fn conflicts_updated(
             }),
             priority: 0,
         });
-        let conflict_addon = editor.addon_mut::<ConflictAddon>().unwrap();
-        ours_inlays.push(Inlay::conflict_marker(
-            util::post_inc(&mut conflict_addon.next_inlay_id),
-            ours_inlay_anchor,
-            repository_snapshot.ours_name().to_owned(),
-        ));
-        theirs_inlays.push(Inlay::conflict_marker(
-            util::post_inc(&mut conflict_addon.next_inlay_id),
-            theirs_inlay_anchor,
-            repository_snapshot.theirs_name().to_owned(),
-        ));
+        // let conflict_addon = editor.addon_mut::<ConflictAddon>().unwrap();
+        // ours_inlays.push(Inlay::conflict_marker(
+        //     util::post_inc(&mut conflict_addon.next_inlay_id),
+        //     ours_inlay_anchor,
+        //     repository_snapshot.ours_name().to_owned(),
+        // ));
+        // theirs_inlays.push(Inlay::conflict_marker(
+        //     util::post_inc(&mut conflict_addon.next_inlay_id),
+        //     theirs_inlay_anchor,
+        //     repository_snapshot.theirs_name().to_owned(),
+        // ));
     }
     let new_block_ids = editor.insert_blocks(blocks, None, cx);
 
     let conflict_addon = editor.addon_mut::<ConflictAddon>().unwrap();
-    let (old_ours_inlays, old_theirs_inlays) =
-        if let Some(buffer_conflicts) = conflict_addon.buffers.get_mut(&buffer_id) {
-            buffer_conflicts.block_ids.splice(
-                event.old_range.clone(),
-                new_conflicts
-                    .iter()
-                    .map(|conflict| conflict.range.clone())
-                    .zip(new_block_ids),
-            );
-            (
-                buffer_conflicts
-                    .ours_inlay_ids
-                    .splice(
-                        event.old_range.clone(),
-                        ours_inlays.iter().map(|inlay| inlay.id),
-                    )
-                    .collect::<Vec<_>>(),
-                buffer_conflicts
-                    .theirs_inlay_ids
-                    .splice(
-                        event.old_range.clone(),
-                        theirs_inlays.iter().map(|inlay| inlay.id),
-                    )
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
-    editor.splice_inlays(&old_ours_inlays, ours_inlays, cx);
-    editor.splice_inlays(&old_theirs_inlays, theirs_inlays, cx);
+    // let (old_ours_inlays, old_theirs_inlays) =
+    if let Some(buffer_conflicts) = conflict_addon.buffers.get_mut(&buffer_id) {
+        buffer_conflicts.block_ids.splice(
+            event.old_range.clone(),
+            new_conflicts
+                .iter()
+                .map(|conflict| conflict.range.clone())
+                .zip(new_block_ids),
+        );
+        // (
+        //     buffer_conflicts
+        //         .ours_inlay_ids
+        //         .splice(
+        //             event.old_range.clone(),
+        //             ours_inlays.iter().map(|inlay| inlay.id),
+        //         )
+        //         .collect::<Vec<_>>(),
+        //     buffer_conflicts
+        //         .theirs_inlay_ids
+        //         .splice(
+        //             event.old_range.clone(),
+        //             theirs_inlays.iter().map(|inlay| inlay.id),
+        //         )
+        //         .collect::<Vec<_>>(),
+        // )
+    } /* else {
+        (Vec::new(), Vec::new())
+    } */;
+    // editor.splice_inlays(&old_ours_inlays, ours_inlays, cx);
+    // editor.splice_inlays(&old_theirs_inlays, theirs_inlays, cx);
 }
 
 fn update_conflict_highlighting(

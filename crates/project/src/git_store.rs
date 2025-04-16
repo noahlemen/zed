@@ -4403,6 +4403,7 @@ fn deserialize_blame_buffer_response(
                 summary: entry.summary,
                 previous: entry.previous,
                 filename: entry.filename,
+                parenthetical: None,
             })
         })
         .collect::<Vec<_>>();

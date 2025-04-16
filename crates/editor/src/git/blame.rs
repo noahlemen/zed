@@ -164,13 +164,9 @@ pub(crate) struct GlobalBlameRenderer(pub Arc<dyn BlameRenderer>);
 impl gpui::Global for GlobalBlameRenderer {}
 
 impl GitBlame {
-    pub fn new(
-        buffer: Entity<Buffer>,
-        project: Entity<Project>,
-        user_triggered: bool,
-        focused: bool,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(buffer: Entity<Buffer>, project: Entity<Project>, cx: &mut Context<Self>) -> Self {
+        let buffer_snapshot = buffer.read(cx).snapshot();
+        let buffer_edits = buffer.update(cx, |buffer, _| buffer.subscribe());
         let entries = SumTree::from_item(
             GitBlameEntry {
                 rows: buffer.read(cx).max_point().row + 1,
@@ -178,6 +174,27 @@ impl GitBlame {
             },
             &(),
         );
+        Self {
+            project,
+            buffer,
+            buffer_snapshot,
+            entries,
+            buffer_edits,
+            user_triggered: false,
+            focused: false,
+            changed_while_blurred: false,
+            commit_details: HashMap::default(),
+            task: Task::ready(Ok(())),
+            generated: false,
+            regenerate_on_edit_task: Task::ready(Ok(())),
+            _regenerate_subscriptions: Vec::new(),
+        }
+    }
+
+    pub fn activate(&mut self, user_triggered: bool, focused: bool, cx: &mut Context<Self>) {
+        let project = self.project.clone();
+        let buffer = self.buffer.clone();
+        let buffer_snapshot = self.buffer.read(cx).snapshot();
 
         let buffer_subscriptions = cx.subscribe(&buffer, |this, buffer, event, cx| match event {
             language::BufferEvent::DirtyChanged => {
@@ -221,30 +238,16 @@ impl GitBlame {
                 _ => {}
             });
 
-        let buffer_snapshot = buffer.read(cx).snapshot();
-        let buffer_edits = buffer.update(cx, |buffer, _| buffer.subscribe());
+        self.buffer_snapshot = buffer_snapshot;
+        self.user_triggered = user_triggered;
+        self.focused = focused;
+        self._regenerate_subscriptions = vec![
+            buffer_subscriptions,
+            project_subscription,
+            git_store_subscription,
+        ];
 
-        let mut this = Self {
-            project,
-            buffer,
-            buffer_snapshot,
-            entries,
-            buffer_edits,
-            user_triggered,
-            focused,
-            changed_while_blurred: false,
-            commit_details: HashMap::default(),
-            task: Task::ready(Ok(())),
-            generated: false,
-            regenerate_on_edit_task: Task::ready(Ok(())),
-            _regenerate_subscriptions: vec![
-                buffer_subscriptions,
-                project_subscription,
-                git_store_subscription,
-            ],
-        };
-        this.generate(cx);
-        this
+        self.generate(cx);
     }
 
     pub fn repository(&self, cx: &App) -> Option<Entity<Repository>> {
@@ -689,7 +692,11 @@ mod tests {
             .await
             .unwrap();
 
-        let blame = cx.new(|cx| GitBlame::new(buffer.clone(), project.clone(), true, true, cx));
+        let blame = cx.new(|cx| {
+            let mut blame = GitBlame::new(buffer.clone(), project.clone(), cx);
+            blame.activate(true, true, cx);
+            blame
+        });
 
         let event = project.next_event(cx).await;
         assert_eq!(
@@ -769,7 +776,11 @@ mod tests {
             .unwrap();
         let buffer_id = buffer.update(cx, |buffer, _| buffer.remote_id());
 
-        let git_blame = cx.new(|cx| GitBlame::new(buffer.clone(), project, false, true, cx));
+        let git_blame = cx.new(|cx| {
+            let mut blame = GitBlame::new(buffer.clone(), project, cx);
+            blame.activate(false, true, cx);
+            blame
+        });
 
         cx.executor().run_until_parked();
 
@@ -879,7 +890,11 @@ mod tests {
             .unwrap();
         let buffer_id = buffer.update(cx, |buffer, _| buffer.remote_id());
 
-        let git_blame = cx.new(|cx| GitBlame::new(buffer.clone(), project, false, true, cx));
+        let git_blame = cx.new(|cx| {
+            let mut blame = GitBlame::new(buffer.clone(), project, cx);
+            blame.activate(false, true, cx);
+            blame
+        });
 
         cx.executor().run_until_parked();
 
@@ -1045,7 +1060,11 @@ mod tests {
             .await
             .unwrap();
 
-        let git_blame = cx.new(|cx| GitBlame::new(buffer.clone(), project, false, true, cx));
+        let git_blame = cx.new(|cx| {
+            let mut blame = GitBlame::new(buffer.clone(), project, cx);
+            blame.activate(false, true, cx);
+            blame
+        });
         cx.executor().run_until_parked();
         git_blame.update(cx, |blame, cx| blame.check_invariants(cx));
 
