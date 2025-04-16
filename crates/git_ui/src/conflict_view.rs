@@ -1,10 +1,8 @@
 use collections::{HashMap, HashSet};
 use editor::{
     ConflictsOurs, ConflictsOursMarker, ConflictsOuter, ConflictsTheirs, ConflictsTheirsMarker,
-    Editor, EditorEvent, ExcerptId, InlayId, MultiBuffer, RowHighlightOptions, ToPoint,
-    display_map::{
-        BlockContext, BlockPlacement, BlockProperties, BlockStyle, CustomBlockId, Inlay,
-    },
+    Editor, EditorEvent, ExcerptId, InlayId, MultiBuffer, RowHighlightOptions,
+    display_map::{BlockContext, BlockPlacement, BlockProperties, BlockStyle, CustomBlockId},
 };
 use gpui::{
     App, AppContext as _, Context, Entity, Hsla, InteractiveElement as _, ParentElement as _,
@@ -12,8 +10,7 @@ use gpui::{
 };
 use language::{Anchor, Buffer, BufferId};
 use project::{
-    ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate, InlayHint,
-    git_store::{Repository, RepositorySnapshot},
+    ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate, git_store::Repository,
 };
 use std::{ops::Range, sync::Arc};
 use ui::{
@@ -185,7 +182,6 @@ fn conflicts_updated(
     }) else {
         return;
     };
-    let repository_snapshot = repository.read(cx).snapshot();
     let multibuffer = editor.buffer().read(cx);
     let snapshot = multibuffer.snapshot(cx);
     let excerpts = multibuffer.excerpts_for_buffer(buffer_id, cx);

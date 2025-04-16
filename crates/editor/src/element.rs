@@ -1,14 +1,15 @@
 use crate::{
-    BlockId, COLUMNAR_SELECTION_MODIFIERS, CURSORS_VISIBLE_FOR, ChunkRendererContext,
-    ChunkReplacement, ConflictsOurs, ConflictsOursMarker, ConflictsOuter, ConflictsTheirs,
-    ConflictsTheirsMarker, ContextMenuPlacement, CursorShape, CustomBlockId, DisplayDiffHunk,
-    DisplayPoint, DisplayRow, DocumentHighlightRead, DocumentHighlightWrite, EditDisplayMode,
-    Editor, EditorMode, EditorSettings, EditorSnapshot, EditorStyle, FILE_HEADER_HEIGHT,
-    FocusedBlock, GutterDimensions, HalfPageDown, HalfPageUp, HandleInput, HoveredCursor,
-    InlayHintRefreshReason, InlineCompletion, JumpData, LineDown, LineHighlight, LineUp,
-    MAX_LINE_LEN, MIN_LINE_NUMBER_DIGITS, MULTI_BUFFER_EXCERPT_HEADER_HEIGHT, OpenExcerpts,
-    PageDown, PageUp, Point, RowExt, RowRangeExt, SelectPhase, SelectedTextHighlight, Selection,
-    SoftWrap, StickyHeaderExcerpt, ToPoint, ToggleFold,
+    BlameRenderer, BlockId, COLUMNAR_SELECTION_MODIFIERS, CURSORS_VISIBLE_FOR,
+    ChunkRendererContext, ChunkReplacement, ConflictsOurs, ConflictsOursMarker, ConflictsOuter,
+    ConflictsTheirs, ConflictsTheirsMarker, ContextMenuPlacement, CursorShape, CustomBlockId,
+    DisplayDiffHunk, DisplayPoint, DisplayRow, DocumentHighlightRead, DocumentHighlightWrite,
+    EditDisplayMode, Editor, EditorMode, EditorSettings, EditorSnapshot, EditorStyle,
+    FILE_HEADER_HEIGHT, FocusedBlock, GlobalBlameRenderer, GutterDimensions, HalfPageDown,
+    HalfPageUp, HandleInput, HoveredCursor, InlayHintRefreshReason, InlineCompletion, JumpData,
+    LineDown, LineHighlight, LineUp, MAX_LINE_LEN, MIN_LINE_NUMBER_DIGITS,
+    MULTI_BUFFER_EXCERPT_HEADER_HEIGHT, OpenExcerpts, PageDown, PageUp, Point, RowExt, RowRangeExt,
+    SelectPhase, SelectedTextHighlight, Selection, SoftWrap, StickyHeaderExcerpt, ToPoint,
+    ToggleFold,
     code_context_menus::{CodeActionsMenu, MENU_ASIDE_MAX_WIDTH, MENU_ASIDE_MIN_WIDTH, MENU_GAP},
     display_map::{
         Block, BlockContext, BlockStyle, DisplaySnapshot, FoldId, HighlightedChunk, ToDisplayPoint,
@@ -17,7 +18,6 @@ use crate::{
         CurrentLineHighlight, DoubleClickInMultibuffer, MultiCursorModifier, ScrollBeyondLastLine,
         ScrollbarAxes, ScrollbarDiagnostics, ShowScrollbar,
     },
-    git::blame::{BlameRenderer, GitBlame, GlobalBlameRenderer},
     hover_popover::{
         self, HOVER_POPOVER_GAP, MIN_POPOVER_CHARACTER_WIDTH, MIN_POPOVER_LINE_HEIGHT,
         POPOVER_RIGHT_OFFSET, hover_at,
@@ -55,6 +55,7 @@ use multi_buffer::{
 };
 use project::{
     debugger::breakpoint_store::Breakpoint,
+    git_store::blame::GitBlame,
     project_settings::{self, GitGutterSetting, GitHunkStyleSetting, ProjectSettings},
 };
 use settings::Settings;
@@ -1784,7 +1785,9 @@ impl EditorElement {
         let workspace = editor.workspace()?.downgrade();
         let blame_entry = blame
             .update(cx, |blame, cx| {
-                blame.blame_for_rows(&[*row_info], cx).next()
+                blame
+                    .blame_for_rows([(row_info.buffer_id, row_info.buffer_row)], cx)
+                    .next()
             })
             .flatten()?;
 
@@ -1847,7 +1850,14 @@ impl EditorElement {
         let blame = self.editor.read(cx).blame.clone()?;
         let workspace = self.editor.read(cx).workspace()?;
         let blamed_rows: Vec<_> = blame.update(cx, |blame, cx| {
-            blame.blame_for_rows(buffer_rows, cx).collect()
+            blame
+                .blame_for_rows(
+                    buffer_rows
+                        .iter()
+                        .map(|row_info| (row_info.buffer_id, row_info.buffer_row)),
+                    cx,
+                )
+                .collect()
         });
 
         let width = if let Some(max_width) = max_width {
@@ -7018,9 +7028,14 @@ impl Element for EditorElement {
                             let blame = editor.blame.as_ref()?;
                             let blame_entry = blame
                                 .update(cx, |blame, cx| {
-                                    let row_infos =
+                                    let row_info =
                                         snapshot.row_infos(snapshot.longest_row()).next()?;
-                                    blame.blame_for_rows(&[row_infos], cx).next()
+                                    blame
+                                        .blame_for_rows(
+                                            [(row_info.buffer_id, row_info.buffer_row)],
+                                            cx,
+                                        )
+                                        .next()
                                 })
                                 .flatten()?;
                             let mut element = render_inline_blame_entry(

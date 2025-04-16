@@ -160,7 +160,7 @@ impl GitRepository for FakeGitRepository {
     }
 
     fn show(&self, _commit: String) -> BoxFuture<Result<CommitDetails>> {
-        unimplemented!()
+        async { Ok(CommitDetails::default()) }.boxed()
     }
 
     fn reset(

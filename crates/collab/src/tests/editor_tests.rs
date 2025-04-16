@@ -4,7 +4,7 @@ use crate::{
 };
 use call::ActiveCall;
 use editor::{
-    Editor, RowInfo,
+    Editor,
     actions::{
         ConfirmCodeAction, ConfirmCompletion, ConfirmRename, ContextMenuFirst,
         ExpandMacroRecursively, Redo, Rename, ToggleCodeActions, Undo,
@@ -2063,16 +2063,7 @@ async fn test_git_blame_is_forwarded(cx_a: &mut TestAppContext, cx_b: &mut TestA
         let blame = editor_b.blame().expect("editor_b should have blame now");
         let entries = blame.update(cx, |blame, cx| {
             blame
-                .blame_for_rows(
-                    &(0..4)
-                        .map(|row| RowInfo {
-                            buffer_row: Some(row),
-                            buffer_id: Some(buffer_id_b),
-                            ..Default::default()
-                        })
-                        .collect::<Vec<_>>(),
-                    cx,
-                )
+                .blame_for_rows((0..4).map(|row| (Some(buffer_id_b), Some(row))), cx)
                 .collect::<Vec<_>>()
         });
 
@@ -2112,12 +2103,8 @@ async fn test_git_blame_is_forwarded(cx_a: &mut TestAppContext, cx_b: &mut TestA
         let entries = blame.update(cx, |blame, cx| {
             blame
                 .blame_for_rows(
-                    &(0..4)
-                        .map(|row| RowInfo {
-                            buffer_row: Some(row),
-                            buffer_id: Some(buffer_id_b),
-                            ..Default::default()
-                        })
+                    (0..4)
+                        .map(|row| (Some(buffer_id_b), Some(row)))
                         .collect::<Vec<_>>(),
                     cx,
                 )
@@ -2148,12 +2135,8 @@ async fn test_git_blame_is_forwarded(cx_a: &mut TestAppContext, cx_b: &mut TestA
         let entries = blame.update(cx, |blame, cx| {
             blame
                 .blame_for_rows(
-                    &(0..4)
-                        .map(|row| RowInfo {
-                            buffer_row: Some(row),
-                            buffer_id: Some(buffer_id_b),
-                            ..Default::default()
-                        })
+                    (0..4)
+                        .map(|row| (Some(buffer_id_b), Some(row)))
                         .collect::<Vec<_>>(),
                     cx,
                 )

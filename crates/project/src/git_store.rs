@@ -1,3 +1,4 @@
+pub mod blame;
 mod conflict_set;
 pub mod git_traversal;
 

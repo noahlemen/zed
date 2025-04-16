@@ -20,7 +20,6 @@ pub mod display_map;
 mod editor_settings;
 mod editor_settings_controls;
 mod element;
-mod git;
 mod highlight_matching_bracket;
 mod hover_links;
 mod hover_popover;
@@ -76,12 +75,11 @@ use futures::{
 };
 use fuzzy::StringMatchCandidate;
 
-use ::git::Restore;
+use ::git::{Restore, blame::ParsedCommitMessage};
 use code_context_menus::{
     AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu, CodeContextMenu,
     CompletionsMenu, ContextMenuOrigin,
 };
-use git::blame::{GitBlame, GlobalBlameRenderer};
 use gpui::{
     Action, Animation, AnimationExt, AnyElement, AnyWeakEntity, App, AppContext,
     AsyncWindowContext, AvailableSpace, Background, Bounds, ClickEvent, ClipboardEntry,
@@ -123,9 +121,9 @@ use project::{
     debugger::breakpoint_store::{
         BreakpointEditAction, BreakpointState, BreakpointStore, BreakpointStoreEvent,
     },
+    git_store::{Repository, blame::GitBlame},
 };
 
-pub use git::blame::BlameRenderer;
 pub use proposed_changes_editor::{
     ProposedChangeLocation, ProposedChangesEditor, ProposedChangesEditorToolbar,
 };
@@ -225,6 +223,91 @@ pub(crate) const EDIT_PREDICTION_KEY_CONTEXT: &str = "edit_prediction";
 pub(crate) const EDIT_PREDICTION_CONFLICT_KEY_CONTEXT: &str = "edit_prediction_conflict";
 pub(crate) const MIN_LINE_NUMBER_DIGITS: u32 = 4;
 
+pub trait BlameRenderer {
+    fn max_author_length(&self) -> usize;
+
+    fn render_blame_entry(
+        &self,
+        _: &TextStyle,
+        _: git::blame::BlameEntry,
+        _: Option<ParsedCommitMessage>,
+        _: Entity<Repository>,
+        _: WeakEntity<Workspace>,
+        _: Entity<Editor>,
+        _: usize,
+        _: Hsla,
+        _: &mut App,
+    ) -> Option<AnyElement>;
+
+    fn render_inline_blame_entry(
+        &self,
+        _: &TextStyle,
+        _: git::blame::BlameEntry,
+        _: Option<ParsedCommitMessage>,
+        _: Entity<Repository>,
+        _: WeakEntity<Workspace>,
+        _: Entity<Editor>,
+        _: &mut App,
+    ) -> Option<AnyElement>;
+
+    fn open_blame_commit(
+        &self,
+        _: git::blame::BlameEntry,
+        _: Entity<Repository>,
+        _: WeakEntity<Workspace>,
+        _: &mut Window,
+        _: &mut App,
+    );
+}
+
+impl BlameRenderer for () {
+    fn max_author_length(&self) -> usize {
+        0
+    }
+
+    fn render_blame_entry(
+        &self,
+        _: &TextStyle,
+        _: git::blame::BlameEntry,
+        _: Option<ParsedCommitMessage>,
+        _: Entity<Repository>,
+        _: WeakEntity<Workspace>,
+        _: Entity<Editor>,
+        _: usize,
+        _: Hsla,
+        _: &mut App,
+    ) -> Option<AnyElement> {
+        None
+    }
+
+    fn render_inline_blame_entry(
+        &self,
+        _: &TextStyle,
+        _: git::blame::BlameEntry,
+        _: Option<ParsedCommitMessage>,
+        _: Entity<Repository>,
+        _: WeakEntity<Workspace>,
+        _: Entity<Editor>,
+        _: &mut App,
+    ) -> Option<AnyElement> {
+        None
+    }
+
+    fn open_blame_commit(
+        &self,
+        _: git::blame::BlameEntry,
+        _: Entity<Repository>,
+        _: WeakEntity<Workspace>,
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+}
+
+pub(crate) struct GlobalBlameRenderer(pub Arc<dyn BlameRenderer>);
+
+impl gpui::Global for GlobalBlameRenderer {}
+
 pub type RenderDiffHunkControlsFn = Arc<
     dyn Fn(
         u32,
@@ -312,8 +395,6 @@ pub fn init_settings(cx: &mut App) {
 
 pub fn init(cx: &mut App) {
     init_settings(cx);
-
-    cx.set_global(GlobalBlameRenderer(Arc::new(())));
 
     workspace::register_project_item::<Editor>(cx);
     workspace::FollowableViewRegistry::register::<Editor>(cx);
@@ -16294,14 +16375,7 @@ impl Editor {
         let blame_entry = blame
             .update(cx, |blame, cx| {
                 blame
-                    .blame_for_rows(
-                        &[RowInfo {
-                            buffer_id: Some(buffer.remote_id()),
-                            buffer_row: Some(point.row),
-                            ..Default::default()
-                        }],
-                        cx,
-                    )
+                    .blame_for_rows([(Some(buffer.remote_id()), Some(point.row))], cx)
                     .next()
             })
             .flatten()?;
@@ -19473,10 +19547,10 @@ impl EditorSnapshot {
         let show_runnables = self.show_runnables.unwrap_or(gutter_settings.runnables);
         let show_breakpoints = self.show_breakpoints.unwrap_or(gutter_settings.breakpoints);
 
+        let renderer = cx.global::<GlobalBlameRenderer>().0.clone();
         let git_blame_entries_width =
             self.git_blame_gutter_max_author_length
                 .map(|max_author_length| {
-                    let renderer = cx.global::<GlobalBlameRenderer>().0.clone();
                     const MAX_RELATIVE_TIMESTAMP: &str = "60 minutes ago";
 
                     /// The number of characters to dedicate to gaps and margins.

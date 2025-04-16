@@ -1,5 +1,4 @@
-use git::repository::CommitDetails;
-use gpui::{App, Context, Entity, EventEmitter, SharedString};
+use gpui::{App, Context, Entity, EventEmitter};
 use std::{cmp::Ordering, ops::Range, sync::Arc};
 use text::{Anchor, BufferId, OffsetRangeExt as _};
 

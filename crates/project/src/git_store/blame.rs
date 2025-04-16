@@ -1,4 +1,7 @@
-use crate::Editor;
+use crate::{
+    Project, ProjectItem,
+    git_store::{GitStoreEvent, Repository, RepositoryEvent},
+};
 use anyhow::Result;
 use collections::HashMap;
 use git::{
@@ -6,20 +9,12 @@ use git::{
     blame::{Blame, BlameEntry, ParsedCommitMessage},
     parse_git_remote_url,
 };
-use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, Hsla, Subscription, Task, TextStyle,
-    WeakEntity, Window,
-};
+use gpui::{App, AppContext as _, Context, Entity, Subscription, Task};
 use language::{Bias, Buffer, BufferSnapshot, Edit};
-use multi_buffer::RowInfo;
-use project::{
-    Project, ProjectItem,
-    git_store::{GitStoreEvent, Repository, RepositoryEvent},
-};
 use smallvec::SmallVec;
 use std::{sync::Arc, time::Duration};
 use sum_tree::SumTree;
-use workspace::Workspace;
+use text::BufferId;
 
 #[derive(Clone, Debug, Default)]
 pub struct GitBlameEntry {
@@ -78,91 +73,6 @@ pub struct GitBlame {
     _regenerate_subscriptions: Vec<Subscription>,
 }
 
-pub trait BlameRenderer {
-    fn max_author_length(&self) -> usize;
-
-    fn render_blame_entry(
-        &self,
-        _: &TextStyle,
-        _: BlameEntry,
-        _: Option<ParsedCommitMessage>,
-        _: Entity<Repository>,
-        _: WeakEntity<Workspace>,
-        _: Entity<Editor>,
-        _: usize,
-        _: Hsla,
-        _: &mut App,
-    ) -> Option<AnyElement>;
-
-    fn render_inline_blame_entry(
-        &self,
-        _: &TextStyle,
-        _: BlameEntry,
-        _: Option<ParsedCommitMessage>,
-        _: Entity<Repository>,
-        _: WeakEntity<Workspace>,
-        _: Entity<Editor>,
-        _: &mut App,
-    ) -> Option<AnyElement>;
-
-    fn open_blame_commit(
-        &self,
-        _: BlameEntry,
-        _: Entity<Repository>,
-        _: WeakEntity<Workspace>,
-        _: &mut Window,
-        _: &mut App,
-    );
-}
-
-impl BlameRenderer for () {
-    fn max_author_length(&self) -> usize {
-        0
-    }
-
-    fn render_blame_entry(
-        &self,
-        _: &TextStyle,
-        _: BlameEntry,
-        _: Option<ParsedCommitMessage>,
-        _: Entity<Repository>,
-        _: WeakEntity<Workspace>,
-        _: Entity<Editor>,
-        _: usize,
-        _: Hsla,
-        _: &mut App,
-    ) -> Option<AnyElement> {
-        None
-    }
-
-    fn render_inline_blame_entry(
-        &self,
-        _: &TextStyle,
-        _: BlameEntry,
-        _: Option<ParsedCommitMessage>,
-        _: Entity<Repository>,
-        _: WeakEntity<Workspace>,
-        _: Entity<Editor>,
-        _: &mut App,
-    ) -> Option<AnyElement> {
-        None
-    }
-
-    fn open_blame_commit(
-        &self,
-        _: BlameEntry,
-        _: Entity<Repository>,
-        _: WeakEntity<Workspace>,
-        _: &mut Window,
-        _: &mut App,
-    ) {
-    }
-}
-
-pub(crate) struct GlobalBlameRenderer(pub Arc<dyn BlameRenderer>);
-
-impl gpui::Global for GlobalBlameRenderer {}
-
 impl GitBlame {
     pub fn new(buffer: Entity<Buffer>, project: Entity<Project>, cx: &mut Context<Self>) -> Self {
         let buffer_snapshot = buffer.read(cx).snapshot();
@@ -212,7 +122,7 @@ impl GitBlame {
             let buffer = buffer.clone();
 
             move |this, _, event, cx| match event {
-                project::Event::WorktreeUpdatedEntries(_, updated) => {
+                crate::Event::WorktreeUpdatedEntries(_, updated) => {
                     let project_entry_id = buffer.read(cx).entry_id(cx);
                     if updated
                         .iter()
@@ -269,18 +179,17 @@ impl GitBlame {
 
     pub fn blame_for_rows<'a>(
         &'a mut self,
-        rows: &'a [RowInfo],
+        rows: impl 'a + IntoIterator<Item = (Option<BufferId>, Option<u32>)>,
         cx: &App,
     ) -> impl 'a + Iterator<Item = Option<BlameEntry>> {
         self.sync(cx);
 
-        let buffer_id = self.buffer_snapshot.remote_id();
         let mut cursor = self.entries.cursor::<u32>(&());
-        rows.into_iter().map(move |info| {
-            let row = info
-                .buffer_row
-                .filter(|_| info.buffer_id == Some(buffer_id))?;
-            cursor.seek_forward(&row, Bias::Right, &());
+        let my_buffer_id = self.buffer_snapshot.remote_id();
+        rows.into_iter().map(move |(buffer_id, buffer_row)| {
+            buffer_id.filter(|buffer_id| *buffer_id == my_buffer_id)?;
+            let buffer_row = buffer_row?;
+            cursor.seek_forward(&buffer_row, Bias::Right, &());
             cursor.item()?.blame.clone()
         })
     }
@@ -483,7 +392,7 @@ impl GitBlame {
                     if this.user_triggered {
                         log::error!("failed to get git blame data: {error:?}");
                         let notification = format!("{:#}", error).trim().to_string();
-                        cx.emit(project::Event::Toast {
+                        cx.emit(crate::Event::Toast {
                             notification_id: "git-blame".into(),
                             message: notification,
                         });
@@ -601,9 +510,9 @@ async fn parse_commit_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FakeFs;
     use gpui::Context;
     use language::{Point, Rope};
-    use project::FakeFs;
     use rand::prelude::*;
     use serde_json::json;
     use settings::SettingsStore;
@@ -633,16 +542,7 @@ mod tests {
     ) {
         pretty_assertions::assert_eq!(
             blame
-                .blame_for_rows(
-                    &rows
-                        .map(|row| RowInfo {
-                            buffer_row: Some(row),
-                            buffer_id: Some(buffer_id),
-                            ..Default::default()
-                        })
-                        .collect::<Vec<_>>(),
-                    cx
-                )
+                .blame_for_rows(rows.map(|row| (Some(buffer_id), Some(row))), cx)
                 .collect::<Vec<_>>(),
             expected
         );
@@ -653,14 +553,9 @@ mod tests {
             let settings = SettingsStore::test(cx);
             cx.set_global(settings);
 
-            theme::init(theme::LoadThemes::JustBase, cx);
-
             language::init(cx);
             client::init_settings(cx);
-            workspace::init_settings(cx);
             Project::init_settings(cx);
-
-            crate::init(cx);
         });
     }
 
@@ -701,7 +596,7 @@ mod tests {
         let event = project.next_event(cx).await;
         assert_eq!(
             event,
-            project::Event::Toast {
+            crate::Event::Toast {
                 notification_id: "git-blame".into(),
                 message: "Failed to blame \"file.txt\": failed to get blame for \"file.txt\""
                     .to_string()
@@ -711,15 +606,7 @@ mod tests {
         blame.update(cx, |blame, cx| {
             assert_eq!(
                 blame
-                    .blame_for_rows(
-                        &(0..1)
-                            .map(|row| RowInfo {
-                                buffer_row: Some(row),
-                                ..Default::default()
-                            })
-                            .collect::<Vec<_>>(),
-                        cx
-                    )
+                    .blame_for_rows((0..1).map(|row| (None, Some(row),)), cx)
                     .collect::<Vec<_>>(),
                 vec![None]
             );
@@ -789,13 +676,7 @@ mod tests {
             pretty_assertions::assert_eq!(
                 blame
                     .blame_for_rows(
-                        &(0..8)
-                            .map(|buffer_row| RowInfo {
-                                buffer_row: Some(buffer_row),
-                                buffer_id: Some(buffer_id),
-                                ..Default::default()
-                            })
-                            .collect::<Vec<_>>(),
+                        (0..8).map(|buffer_row| (Some(buffer_id), Some(buffer_row))),
                         cx
                     )
                     .collect::<Vec<_>>(),
@@ -814,13 +695,7 @@ mod tests {
             pretty_assertions::assert_eq!(
                 blame
                     .blame_for_rows(
-                        &(1..4)
-                            .map(|buffer_row| RowInfo {
-                                buffer_row: Some(buffer_row),
-                                buffer_id: Some(buffer_id),
-                                ..Default::default()
-                            })
-                            .collect::<Vec<_>>(),
+                        (1..4).map(|buffer_row| (Some(buffer_id), Some(buffer_row))),
                         cx
                     )
                     .collect::<Vec<_>>(),
@@ -833,18 +708,7 @@ mod tests {
             // Subset of lines, with some not displayed
             pretty_assertions::assert_eq!(
                 blame
-                    .blame_for_rows(
-                        &[
-                            RowInfo {
-                                buffer_row: Some(1),
-                                buffer_id: Some(buffer_id),
-                                ..Default::default()
-                            },
-                            Default::default(),
-                            Default::default(),
-                        ],
-                        cx
-                    )
+                    .blame_for_rows([(Some(buffer_id), Some(1)), (None, None), (None, None)], cx)
                     .collect::<Vec<_>>(),
                 vec![Some(blame_entry("0d0d0d", 1..2)), None, None]
             );
